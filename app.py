@@ -111,35 +111,60 @@ def top_factors(stats, inputs):
     for j, col in enumerate(NUMERIC_COLS):
         grouped[col] = importances[n_cat + j]
 
+    if inputs["mileage_miles"] <= stats["median_mileage"] * 0.7:
+        mileage_msg = f"Low mileage ({inputs['mileage_miles']:,} mi) added value"
+    elif inputs["mileage_miles"] >= stats["median_mileage"] * 1.5:
+        mileage_msg = f"High mileage ({inputs['mileage_miles']:,} mi) pulled it down"
+    else:
+        mileage_msg = f"Average mileage ({inputs['mileage_miles']:,} mi) kept it steady"
+
+    if inputs["year"] >= stats["median_year"] + 3:
+        year_msg = f"Newer model year ({inputs['year']}) added value"
+    elif inputs["year"] <= stats["median_year"] - 3:
+        year_msg = f"Older model year ({inputs['year']}) pulled it down"
+    else:
+        year_msg = f"Typical model year ({inputs['year']}) kept it steady"
+
     explanations = {
-        "mileage_miles": (
-            f"Mileage ({inputs['mileage_miles']:,} mi vs typical "
-            f"{stats['median_mileage']:,.0f} mi)"
-            + (" lowered the estimate" if inputs["mileage_miles"] > stats["median_mileage"]
-               else " raised the estimate")
+        "mileage_miles": mileage_msg,
+        "year": year_msg,
+        "brand": f"Brand ({inputs['brand']}) moved it vs the market average",
+        "model_clean": (
+            f"Model ({inputs.get('model', inputs['model_clean'])}) moved it vs similar cars"
         ),
-        "year": (
-            f"Model year ({inputs['year']} vs typical {stats['median_year']:.0f})"
-            + (" raised the estimate" if inputs["year"] >= stats["median_year"]
-               else " lowered the estimate")
-        ),
-        "brand": f"Brand ({inputs['brand']}) priced vs the market average",
-        "model_clean": f"Model ({inputs.get('model', inputs['model_clean'])}) priced vs similar cars",
-        "fuel_type": f"Fuel type ({inputs['fuel_type']}) adjusted the estimate",
-        "trans_group": f"Transmission ({inputs['trans_group']}) adjusted the estimate",
+        "fuel_type": f"Fuel type ({inputs['fuel_type']}) nudged it",
+        "trans_group": f"Transmission ({inputs['trans_group']}) nudged it",
         "accident_reported": (
-            "Accident reported lowered the estimate"
+            "Reported accident pulled it down"
             if inputs["accident_reported"] == "Yes"
-            else "Clean accident history supported the estimate"
+            else "Clean accident history added value"
         ),
         "clean_title": (
-            "Clean title supported the estimate"
+            "Clean title added value"
             if inputs["clean_title"] == "Yes"
             else "Unknown title status added uncertainty"
         ),
     }
     ranked = sorted(grouped.items(), key=lambda kv: kv[1], reverse=True)[:3]
     return [explanations[col] for col, _ in ranked]
+
+
+def similar_listings(df, inputs, estimate, n=3):
+    """3 real listings to sanity-check the estimate.
+
+    Same brand and model first, then same brand, then anything —
+    closest in price to the estimate in each step.
+    """
+    same_model = df[
+        (df["brand"] == inputs["brand"])
+        & (df["model_clean"] == inputs["model_clean"])
+    ]
+    pool = same_model if len(same_model) >= n else df[df["brand"] == inputs["brand"]]
+    if len(pool) < n:
+        pool = df
+    closest = pool.iloc[(pool["price_usd"] - estimate).abs().argsort()[:n]]
+    return closest[["model", "year", "mileage_miles", "fuel_type",
+                    "transmission", "accident_reported", "price_usd"]]
 
 
 df = load_data()
@@ -183,9 +208,12 @@ def main():
 
         st.subheader(f"Estimated price: ${estimate:,.0f}")
         st.write(f"Expected range: ${low:,.0f} – ${high:,.0f}")
-        st.write("Top factors:")
+        st.write("What moved this price:")
         for factor in top_factors(STATS, inputs):
             st.write(f"- {factor}")
+
+        st.write("Similar real listings (sanity check):")
+        st.dataframe(similar_listings(df, inputs, estimate))
 
 
 if __name__ == "__main__":
